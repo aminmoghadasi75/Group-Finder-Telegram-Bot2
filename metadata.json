@@ -1,0 +1,6 @@
+{
+  "name": "Telegram Group Scraper & UserBot",
+  "description": "سامانه هوشمند و ایمن جستجو، کشف و آنالیز گروه‌های عمومی تلگرام بر اساس کلمات کلیدی با کنترل ضدرپورت و Flood",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
