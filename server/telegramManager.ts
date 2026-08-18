@@ -2,12 +2,103 @@ import { TelegramClient, Api } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
 import fs from "fs";
 import path from "path";
-import { GroupInfo, SearchSettings, LogMessage, SearchProgress, GroupBarrierType, PurgeProgress, PurgeOptions, ProbeBatchProgress } from "../src/types.js";
+import { GroupInfo, SearchSettings, LogMessage, SearchProgress, GroupBarrierType, PurgeProgress, PurgeOptions, ProbeBatchProgress, TelegramUser } from "../src/types.js";
 import { normalizePersianDigits, cleanPhoneCode, cleanPhoneNumber } from "../src/utils/numberUtils.js";
 
 // Storage path configuration
 const DATA_DIR = path.join(process.cwd(), "data");
 const STORAGE_FILE = path.join(DATA_DIR, "app_storage.json");
+
+// Helper to calculate realistic and dynamic safety rating based on multiple real indicators
+export function calculateGroupSafetyScore(info: {
+  isScam?: boolean;
+  isFake?: boolean;
+  isRestricted?: boolean;
+  canSendMessages?: boolean;
+  membersCount?: number;
+  description?: string;
+  isSupergroup?: boolean;
+  barrierType?: GroupBarrierType;
+  username?: string;
+  id?: string;
+}): number {
+  // Base starting score for standard public telegram groups
+  let score = 85;
+
+  // 1. Critical Flags from Telegram MTProto
+  if (info.isScam || info.isFake) {
+    return 18;
+  }
+  if (info.isRestricted) {
+    score -= 35;
+  }
+
+  // 2. Message Permission
+  if (info.canSendMessages === false) {
+    score -= 18;
+  }
+
+  // 3. Barrier Type Impact (Probe analysis)
+  switch (info.barrierType) {
+    case 'FREE_SEND':
+      score += 11; // Reaches 95% - 98% (Clean, open community)
+      break;
+    case 'BOT_CAPTCHA':
+      score += 5;  // Reaches 89% - 93% (Moderated with anti-spam captcha)
+      break;
+    case 'SLOW_MODE':
+      score += 1;  // Reaches 84% - 87% (Controlled traffic)
+      break;
+    case 'FORCE_CHANNEL_JOIN':
+      score -= 12; // Drops to 70% - 76% (Sponsor lock / marketing funnel)
+      break;
+    case 'FORCE_ADD_MEMBERS':
+      score -= 28; // Drops to 54% - 62% (High risk: forcing contact scraping/invites)
+      break;
+    case 'READ_ONLY':
+      score -= 15; // Drops to 68% - 73% (Broadcast only)
+      break;
+    case 'NO_LINK_ALLOWED':
+      score -= 6;
+      break;
+    case 'UNKNOWN':
+    default:
+      // Keep around baseline 82-88%
+      break;
+  }
+
+  // 4. Member Count Scale & Authenticity
+  const members = info.membersCount || 0;
+  if (members > 15000) score += 3;
+  else if (members > 4000) score += 2;
+  else if (members > 1000) score += 1;
+  else if (members < 200) score -= 4;
+
+  // 5. Description & Metadata Completeness
+  if (info.description && info.description.length > 25) {
+    score += 2;
+  } else if (!info.description || info.description.trim().length === 0) {
+    score -= 3;
+  }
+
+  // 6. Supergroup Architecture
+  if (info.isSupergroup) {
+    score += 1;
+  }
+
+  // 7. Deterministic Natural Variance per Group (-2 to +2) so each group has a unique realistic score
+  const seedKey = (info.username || info.id || 'group') + (info.membersCount || 0);
+  let hash = 0;
+  for (let i = 0; i < seedKey.length; i++) {
+    hash = (hash << 5) - hash + seedKey.charCodeAt(i);
+    hash |= 0;
+  }
+  const variance = (Math.abs(hash) % 5) - 2;
+  score += variance;
+
+  // Bounded between 15% and 99%
+  return Math.min(99, Math.max(15, score));
+}
 
 // Global singleton state for Telegram Client
 class TelegramManager {
@@ -160,11 +251,14 @@ class TelegramManager {
         this.discoveredGroupsMap.clear();
         for (const g of data.groups) {
           if (g && g.id) {
+            // Recalculate dynamic safety score based on barrier & metadata
+            g.safetyScore = calculateGroupSafetyScore(g);
             this.discoveredGroupsMap.set(g.id, g);
           }
         }
         this.searchProgress.totalFound = this.discoveredGroupsMap.size;
         this.searchProgress.validGroupsCount = Array.from(this.discoveredGroupsMap.values()).filter(g => g.canSendMessages).length;
+        this.saveToDisk();
       } else {
         this.seedInitialGroups();
         this.saveToDisk();
@@ -190,6 +284,139 @@ class TelegramManager {
       console.error("Failed to load state from disk:", err);
     }
     return false;
+  }
+
+  // Create a 100% complete frozen snapshot of all settings, credentials, session, groups, and logs
+  public createFullBackupSnapshot(): any {
+    this.saveToDisk(); // Ensure latest state is flushed to disk first
+    const groupsList = Array.from(this.discoveredGroupsMap.values());
+    const isConnected = Boolean(this.client && this.client.connected);
+    
+    return {
+      version: "2.5",
+      snapshotType: "TELEGRAM_USERBOT_FULL_BACKUP",
+      exportedAt: new Date().toISOString(),
+      exportedAtLocal: new Date().toLocaleString('fa-IR'),
+      appMetadata: {
+        title: "یوزربات کاوشگر گروه‌های عمومی تلگرام",
+        totalGroupsCount: groupsList.length,
+        validGroupsCount: groupsList.filter(g => g.canSendMessages).length,
+        keywordsCount: this.savedSettings.keywords.length,
+        isConnected,
+        userPhone: this.currentPhone || null
+      },
+      telegramSession: {
+        apiId: this.apiId,
+        apiHash: this.apiHash,
+        sessionString: this.sessionString,
+        currentPhone: this.currentPhone,
+        isConnected
+      },
+      settings: this.savedSettings,
+      groups: groupsList,
+      dailyJoinsCount: this.searchProgress.dailyJoinsCount || 0,
+      logs: this.searchProgress.logs.slice(0, 300)
+    };
+  }
+
+  // Restore 100% of data and settings from uploaded JSON snapshot
+  public async restoreFromBackupSnapshot(data: any): Promise<{
+    success: boolean;
+    message: string;
+    restoredGroupsCount: number;
+    isConnected: boolean;
+    user?: TelegramUser | null;
+  }> {
+    if (!data || typeof data !== 'object') {
+      throw new Error("فایل پشتیبان ارسالی نامعتبر است.");
+    }
+
+    try {
+      // 1. Restore Telegram Session & Credentials
+      if (data.telegramSession) {
+        if (data.telegramSession.apiId) this.apiId = Number(data.telegramSession.apiId);
+        if (data.telegramSession.apiHash) this.apiHash = data.telegramSession.apiHash;
+        if (data.telegramSession.sessionString) this.sessionString = data.telegramSession.sessionString;
+        if (data.telegramSession.currentPhone) this.currentPhone = data.telegramSession.currentPhone;
+      } else {
+        if (data.apiId) this.apiId = Number(data.apiId);
+        if (data.apiHash) this.apiHash = data.apiHash;
+        if (data.sessionString) this.sessionString = data.sessionString;
+        if (data.currentPhone) this.currentPhone = data.currentPhone;
+      }
+
+      // 2. Restore Search Settings & Keywords
+      if (data.settings && typeof data.settings === 'object') {
+        this.savedSettings = {
+          ...this.savedSettings,
+          ...data.settings
+        };
+      }
+
+      // 3. Restore Discovered Groups Map
+      const importedGroups: GroupInfo[] = Array.isArray(data.groups) ? data.groups : [];
+      if (importedGroups.length > 0) {
+        this.discoveredGroupsMap.clear();
+        for (const g of importedGroups) {
+          if (g && (g.id || g.username)) {
+            const gid = g.id || `group-${g.username.replace('@', '')}`;
+            // Dynamically recalculate/normalize safety score
+            g.safetyScore = calculateGroupSafetyScore(g);
+            this.discoveredGroupsMap.set(gid, {
+              ...g,
+              id: gid
+            });
+          }
+        }
+        this.searchProgress.totalFound = this.discoveredGroupsMap.size;
+        this.searchProgress.validGroupsCount = Array.from(this.discoveredGroupsMap.values()).filter(g => g.canSendMessages).length;
+      }
+
+      // 4. Restore Logs & Daily Counters
+      if (typeof data.dailyJoinsCount === 'number') {
+        this.searchProgress.dailyJoinsCount = data.dailyJoinsCount;
+      }
+      if (Array.isArray(data.logs) && data.logs.length > 0) {
+        this.searchProgress.logs = [
+          ...data.logs.slice(0, 150),
+          {
+            id: `log-restore-${Date.now()}`,
+            timestamp: new Date().toLocaleTimeString('fa-IR'),
+            level: 'success',
+            message: `[بازیابی پشتیبان 🔄] تمامی اطلاعات (${this.discoveredGroupsMap.size} گروه و کلمات کلیدی) از فایل پشتیبان بازیابی شدند.`
+          }
+        ];
+      } else {
+        this.addLog('success', `[بازیابی پشتیبان 🔄] تمامی اطلاعات (${this.discoveredGroupsMap.size} گروه و کلمات کلیدی) از فایل پشتیبان با موفقیت بازیابی شدند.`);
+      }
+
+      // 5. Persist to disk
+      this.saveToDisk();
+
+      // 6. Re-connect Telegram Session if credentials are present
+      let userObj: TelegramUser | null = null;
+      if (this.apiId && this.apiHash && this.sessionString) {
+        this.addLog('info', '[اتصال مجدد نشست 🔐] تلاش برای برقراری ارتباط خودکار نشست تلگرام بازیابی‌شده...');
+        const initRes = await this.initClient(this.apiId, this.apiHash, this.sessionString);
+        if (initRes.success && initRes.connected) {
+          userObj = await this.getMe();
+          this.addLog('success', `[اتصال تلگرام برقرار شد ✅] خوش‌آمدید! اکانت ${userObj?.phone || userObj?.firstName || ''} مجدداً فعال است.`);
+        }
+      }
+
+      const isConnectedNow = Boolean(this.client && this.client.connected);
+
+      return {
+        success: true,
+        message: `پشتیبان با موفقیت بازیابی شد. تعداد ${this.discoveredGroupsMap.size} گروه، تنظیمات و نشست تلگرام فعال گردیدند.`,
+        restoredGroupsCount: this.discoveredGroupsMap.size,
+        isConnected: isConnectedNow,
+        user: userObj
+      };
+    } catch (err: any) {
+      console.error("Restore backup error:", err);
+      throw new Error(`خطا در بازیابی فایل پشتیبان: ${err.message}`);
+    }
   }
 
   private seedInitialGroups() {
@@ -715,7 +942,17 @@ class TelegramManager {
                 foundByKeyword: keyword,
                 discoveredAt: new Date().toISOString(),
                 joined: false,
-                safetyScore: isScam || isFake ? 20 : (isRestricted ? 50 : 95)
+                safetyScore: calculateGroupSafetyScore({
+                  isScam,
+                  isFake,
+                  isRestricted,
+                  canSendMessages,
+                  membersCount,
+                  description: anyChat.about,
+                  isSupergroup: true,
+                  username: `@${username}`,
+                  id: groupId
+                })
               };
 
               this.discoveredGroupsMap.set(groupId, groupInfo);
@@ -785,7 +1022,14 @@ class TelegramManager {
           foundByKeyword: keyword,
           discoveredAt: new Date().toISOString(),
           joined: false,
-          safetyScore: 92,
+          safetyScore: calculateGroupSafetyScore({
+            canSendMessages: canSend,
+            membersCount: members,
+            description: `گروه عمومی تلگرام با موضوع ${keyword}`,
+            isSupergroup: true,
+            username: `@${randomUsername}`,
+            id: groupId
+          }),
           recentActivityStatus: 'فعال'
         };
 
@@ -1023,13 +1267,25 @@ class TelegramManager {
       this.addLog('safety', `[دمو - خروجی خلوت‌ساز 🧹] تست شبیه‌سازی انجام شد و برای جلوگیری از شلوغی، گروه از لیست چت‌ها پاک شد.`);
     }
 
-    // Update group info in Map
+    // Update group info in Map with fresh barrier analysis & dynamic safety score
     for (const [id, group] of this.discoveredGroupsMap.entries()) {
       if (group.username.toLowerCase().includes(cleanHandle.toLowerCase())) {
         group.barrierType = barrierType;
         group.barrierDetails = barrierDetails;
         group.autoCleaned = autoCleaned;
         group.joined = false; // Always left so it's clean
+        group.safetyScore = calculateGroupSafetyScore({
+          isScam: group.isScam,
+          isFake: group.isFake,
+          isRestricted: group.isRestricted,
+          canSendMessages: group.canSendMessages,
+          membersCount: group.membersCount,
+          description: group.description,
+          isSupergroup: group.isSupergroup,
+          barrierType: barrierType,
+          username: group.username,
+          id: group.id
+        });
         this.discoveredGroupsMap.set(id, group);
       }
     }

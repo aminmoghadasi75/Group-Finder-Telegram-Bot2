@@ -102,24 +102,80 @@ export const GroupDetailModal: React.FC<GroupDetailModalProps> = ({
           </div>
         </div>
 
-        {/* Safety Metric Rating */}
-        <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
+        {/* Safety Metric Rating & Factors Breakdown */}
+        <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
           <div className="flex items-center justify-between text-xs">
-            <span className="text-slate-400 flex items-center gap-1.5 font-medium">
-              <ShieldCheck className="w-4 h-4 text-emerald-400" />
-              امتیاز سلامت و ایمنی گروه (Safety Rating):
+            <span className="text-slate-300 flex items-center gap-1.5 font-bold">
+              <ShieldCheck className={`w-4 h-4 ${
+                group.safetyScore >= 90 ? 'text-emerald-400' :
+                group.safetyScore >= 75 ? 'text-cyan-400' :
+                group.safetyScore >= 60 ? 'text-amber-400' : 'text-red-400'
+              }`} />
+              شاخص سلامت و ایمنی گروه (Safety Rating):
             </span>
-            <span className="font-mono text-emerald-400 font-bold">{group.safetyScore}٪</span>
+            <span className={`font-mono font-bold px-2 py-0.5 rounded text-xs ${
+              group.safetyScore >= 90 ? 'bg-emerald-950 text-emerald-400 border border-emerald-800/60' :
+              group.safetyScore >= 75 ? 'bg-cyan-950 text-cyan-400 border border-cyan-800/60' :
+              group.safetyScore >= 60 ? 'bg-amber-950 text-amber-400 border border-amber-800/60' :
+              'bg-red-950 text-red-400 border border-red-800/60'
+            }`}>
+              {group.safetyScore}٪ ({
+                group.safetyScore >= 90 ? 'بسیار ایمن و آزاد' :
+                group.safetyScore >= 75 ? 'ایمن و استاندارد' :
+                group.safetyScore >= 60 ? 'دارای محدودیت / قفل' : 'ریسک بالا'
+              })
+            </span>
           </div>
+
+          {/* Progress Bar */}
           <div className="w-full bg-slate-900 h-2 rounded-full overflow-hidden">
             <div
-              className="bg-gradient-to-r from-emerald-500 to-cyan-500 h-full rounded-full transition-all duration-500"
+              className={`h-full rounded-full transition-all duration-500 ${
+                group.safetyScore >= 90 ? 'bg-gradient-to-r from-emerald-500 to-teal-400' :
+                group.safetyScore >= 75 ? 'bg-gradient-to-r from-cyan-500 to-blue-400' :
+                group.safetyScore >= 60 ? 'bg-gradient-to-r from-amber-500 to-orange-400' :
+                'bg-gradient-to-r from-red-500 to-rose-400'
+              }`}
               style={{ width: `${group.safetyScore}%` }}
             ></div>
           </div>
-          <p className="text-[11px] text-slate-500">
-            گروه بدون ریپورت، بدون نمره ریستریکت و سوپرگروه عمومی معتبر با امکان ارسال لینک.
-          </p>
+
+          {/* Factors Checklist */}
+          <div className="grid grid-cols-2 gap-2 text-[11px] pt-1">
+            <div className="flex items-center gap-1.5 text-slate-300">
+              <span className="text-emerald-400">✔</span>
+              <span>بدون علامت اسپم/Fake تلگرام</span>
+            </div>
+            <div className="flex items-center gap-1.5 text-slate-300">
+              <span className={group.isRestricted ? "text-red-400" : "text-emerald-400"}>
+                {group.isRestricted ? "✖" : "✔"}
+              </span>
+              <span>{group.isRestricted ? "دارای محدودیت منطقه‌ای" : "بدون ریستریکت تلگرام"}</span>
+            </div>
+            <div className="flex items-center gap-1.5 text-slate-300">
+              <span className={group.barrierType === 'FORCE_ADD_MEMBERS' ? "text-red-400" : group.barrierType === 'FORCE_CHANNEL_JOIN' ? "text-amber-400" : "text-emerald-400"}>
+                {group.barrierType === 'FORCE_ADD_MEMBERS' ? "⚠️" : group.barrierType === 'FORCE_CHANNEL_JOIN' ? "📢" : "✔"}
+              </span>
+              <span>
+                {group.barrierType === 'FREE_SEND' ? 'ارسال کاملاً آزاد (امتیاز مثبت)' :
+                 group.barrierType === 'BOT_CAPTCHA' ? 'کاپچا ناظم (مدیریت شده)' :
+                 group.barrierType === 'FORCE_CHANNEL_JOIN' ? 'قفل کانال (کسر امتیاز)' :
+                 group.barrierType === 'FORCE_ADD_MEMBERS' ? 'ادد اجباری (ریسک بالا)' :
+                 group.barrierType === 'SLOW_MODE' ? 'حالت کند / تاخیر زمانی' :
+                 group.barrierType === 'READ_ONLY' ? 'فقط خواندنی' : 'بررسی اولیه'}
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5 text-slate-300">
+              <span className="text-emerald-400">✔</span>
+              <span>سوپرگروه با اعضای فعال</span>
+            </div>
+          </div>
+
+          {group.barrierDetails && (
+            <p className="text-[11px] text-cyan-300/90 bg-cyan-950/40 p-2 rounded-lg border border-cyan-900/40 leading-relaxed">
+              💡 <strong>تحلیل مانع:</strong> {group.barrierDetails}
+            </p>
+          )}
         </div>
 
         {/* Footer Action Buttons */}

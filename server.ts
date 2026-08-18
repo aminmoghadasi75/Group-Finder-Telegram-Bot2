@@ -9,7 +9,8 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  app.use(express.json());
+  app.use(express.json({ limit: '50mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
   // Auto-load saved Telegram session & discovered groups from persistent disk storage
   try {
@@ -274,6 +275,53 @@ async function startServer() {
       res.json(result);
     } catch (err: any) {
       res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // --- 100% FULL BACKUP & SNAPSHOT ENDPOINTS ---
+
+  // 1. Save 100% of state, settings, credentials & groups to disk immediately
+  app.post("/api/telegram/backup/save", (req, res) => {
+    try {
+      telegramManager.saveToDisk();
+      const snapshot = telegramManager.createFullBackupSnapshot();
+      res.json({
+        success: true,
+        message: "تمامی اطلاعات، نشست تلگرام، گروه‌ها، کلمات کلیدی و تنظیمات با موفقیت ۱۰۰٪ در دیسک ذخیره و فریز شدند 💾",
+        metadata: snapshot.appMetadata,
+        lastSavedAt: snapshot.exportedAtLocal
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: `خطا در ذخیره‌سازی داده‌ها: ${err.message}` });
+    }
+  });
+
+  // 2. Export / Download 100% JSON Backup Snapshot
+  app.get("/api/telegram/backup/export", (req, res) => {
+    try {
+      const snapshot = telegramManager.createFullBackupSnapshot();
+      const filename = `telegram_userbot_backup_${new Date().toISOString().slice(0, 10)}_${Date.now().toString().slice(-4)}.json`;
+      
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.send(JSON.stringify(snapshot, null, 2));
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: `خطا در تولید فایل پشتیبان: ${err.message}` });
+    }
+  });
+
+  // 3. Restore / Upload 100% JSON Backup Snapshot
+  app.post("/api/telegram/backup/import", async (req, res) => {
+    try {
+      const backupData = req.body;
+      if (!backupData || typeof backupData !== 'object') {
+        return res.status(400).json({ success: false, error: "داده‌های فایل پشتیبان ارسال نشده یا نامعتبر است." });
+      }
+
+      const result = await telegramManager.restoreFromBackupSnapshot(backupData);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message || "خطا در بازیابی پشتیبان" });
     }
   });
 

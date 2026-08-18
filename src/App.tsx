@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Navbar } from './components/Navbar';
 import { TelegramAuthCard } from './components/TelegramAuthCard';
 import { KeywordSearchPanel } from './components/KeywordSearchPanel';
@@ -7,14 +7,29 @@ import { GroupDatabaseGrid } from './components/GroupDatabaseGrid';
 import { SafetyGuidelinesHub } from './components/SafetyGuidelinesHub';
 import { GroupDetailModal } from './components/GroupDetailModal';
 import { PurgeModal } from './components/PurgeModal';
-import { AuthStep, TelegramUser, SearchSettings, SearchProgress, GroupInfo, ProbeBatchProgress } from './types';
+import { BackupRestoreModal } from './components/BackupRestoreModal';
+import { 
+  AuthStep, 
+  TelegramUser, 
+  SearchSettings, 
+  SearchProgress, 
+  GroupInfo, 
+  ProbeBatchProgress 
+} from './types';
 import { MOCK_DISCOVERED_GROUPS } from './utils/mockData';
+import { Database, Save, Download, Upload, CheckCircle2, AlertCircle, RefreshCw } from 'lucide-react';
 
 export default function App() {
   const [authStep, setAuthStep] = useState<AuthStep>('disconnected');
   const [userProfile, setUserProfile] = useState<TelegramUser | null>(null);
   const [activeTab, setActiveTab] = useState<'search' | 'groups' | 'auth' | 'safety'>('search');
   const [isPurgeModalOpen, setIsPurgeModalOpen] = useState(false);
+  const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
+  const [toastMessage, setToastMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [isQuickSaving, setIsQuickSaving] = useState(false);
+  const [isQuickDownloading, setIsQuickDownloading] = useState(false);
+
+  const quickFileInputRef = useRef<HTMLInputElement>(null);
 
   const [probeBatchProgress, setProbeBatchProgress] = useState<ProbeBatchProgress>({
     isProbing: false,
@@ -383,9 +398,105 @@ export default function App() {
     }
   };
 
+  // Full Refresh handler
+  const handleFullRefresh = async () => {
+    await fetchGroups();
+    await fetchSettings();
+    await checkTelegramStatus();
+  };
+
+  // 1. Quick Save 100% Snapshot Handler
+  const handleQuickSave = async () => {
+    setIsQuickSaving(true);
+    try {
+      const res = await fetch('/api/telegram/backup/save', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setToastMessage({ type: 'success', text: data.message || 'تمامی اطلاعات ۱۰۰٪ در سرور ذخیره و فریز شدند 💾' });
+      } else {
+        setToastMessage({ type: 'error', text: data.error || 'خطا در ذخیره‌سازی داده‌ها' });
+      }
+    } catch (e: any) {
+      setToastMessage({ type: 'error', text: e.message || 'خطا در ارتباط با سرور' });
+    } finally {
+      setIsQuickSaving(false);
+      setTimeout(() => setToastMessage(null), 4000);
+    }
+  };
+
+  // 2. Quick Download JSON Backup Handler
+  const handleQuickDownload = async () => {
+    setIsQuickDownloading(true);
+    try {
+      const response = await fetch('/api/telegram/backup/export');
+      if (!response.ok) throw new Error('خطا در دریافت فایل پشتیبان از سرور');
+      
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const dateStr = new Date().toISOString().slice(0, 10);
+      a.download = `telegram_userbot_backup_${dateStr}_${Date.now().toString().slice(-4)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+
+      setToastMessage({ type: 'success', text: 'فایل پشتیبان JSON با موفقیت تولید و دانلود شد ⬇️' });
+    } catch (e: any) {
+      setToastMessage({ type: 'error', text: e.message || 'خطا در دانلود فایل پشتیبان' });
+    } finally {
+      setIsQuickDownloading(false);
+      setTimeout(() => setToastMessage(null), 4000);
+    }
+  };
+
+  // 3. Quick Upload / Restore Backup Handler
+  const handleQuickUploadFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const content = event.target?.result as string;
+        const backupData = JSON.parse(content);
+
+        const res = await fetch('/api/telegram/backup/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(backupData)
+        });
+
+        const data = await res.json();
+        if (data.success) {
+          setToastMessage({ type: 'success', text: data.message || 'پشتیبان با موفقیت ۱۰۰٪ بازگردانی شد ✅' });
+          await handleFullRefresh();
+        } else {
+          setToastMessage({ type: 'error', text: data.error || 'خطا در بازگردانی پشتیبان' });
+        }
+      } catch (err: any) {
+        setToastMessage({ type: 'error', text: 'فایل انتخاب‌شده یک JSON معتبر نیست.' });
+      } finally {
+        if (quickFileInputRef.current) quickFileInputRef.current.value = '';
+        setTimeout(() => setToastMessage(null), 5000);
+      }
+    };
+    reader.readAsText(file);
+  };
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans antialiased dir-rtl selection:bg-cyan-500 selection:text-white">
       
+      {/* Hidden file input for quick restore */}
+      <input
+        ref={quickFileInputRef}
+        type="file"
+        accept=".json"
+        onChange={handleQuickUploadFile}
+        className="hidden"
+      />
+
       {/* Top Header Navbar */}
       <Navbar
         authStep={authStep}
@@ -394,10 +505,102 @@ export default function App() {
         groupsCount={groups.length}
         isSearching={progress.isSearching}
         userPhone={userProfile?.phone}
+        onOpenBackupModal={() => setIsBackupModalOpen(true)}
       />
 
+      {/* Toast Notification Alert */}
+      {toastMessage && (
+        <div className="fixed bottom-6 right-6 z-50 animate-bounce">
+          <div className={`p-4 rounded-xl shadow-2xl border flex items-center gap-3 text-xs font-bold ${
+            toastMessage.type === 'success'
+              ? 'bg-emerald-950/90 border-emerald-800 text-emerald-300 shadow-emerald-950/50'
+              : 'bg-red-950/90 border-red-800 text-red-300 shadow-red-950/50'
+          }`}>
+            {toastMessage.type === 'success' ? (
+              <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
+            ) : (
+              <AlertCircle className="w-5 h-5 text-red-400 shrink-0" />
+            )}
+            <span>{toastMessage.text}</span>
+          </div>
+        </div>
+      )}
+
       {/* Main Content Area */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+        
+        {/* Prominent Quick Backup & Restore Three-Button Action Hub */}
+        <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xl flex flex-col md:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-3 w-full md:w-auto">
+            <div className="w-10 h-10 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 shrink-0">
+              <Database className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-bold text-white">مرکز فریز، پشتیبان‌گیری و بازیابی داده‌ها</h2>
+                <span className="text-[10px] bg-slate-800 text-cyan-300 px-2 py-0.5 rounded-full font-mono border border-slate-700">
+                  {groups.length} گروه | {settings.keywords.length} کلیدواژه
+                </span>
+              </div>
+              <p className="text-xs text-slate-400">
+                قبل از خروج یا خاموش کردن اپ، از این سه دکمه برای فریز ۱۰۰٪ و بازیابی سریع وضعیت استفاده کنید:
+              </p>
+            </div>
+          </div>
+
+          {/* The 3 Core Buttons Requested by User */}
+          <div className="flex flex-wrap items-center gap-2 w-full md:w-auto justify-end">
+            
+            {/* Button 1: Save 100% */}
+            <button
+              onClick={handleQuickSave}
+              disabled={isQuickSaving}
+              className="flex-1 sm:flex-none py-2 px-3.5 bg-slate-800 hover:bg-slate-700 text-cyan-300 rounded-xl text-xs font-bold border border-slate-700 hover:border-cyan-500/60 flex items-center justify-center gap-2 transition-all shadow-md active:scale-95"
+              title="ذخیره‌سازی کامل وضعیت در دیسک"
+            >
+              {isQuickSaving ? (
+                <RefreshCw className="w-3.5 h-3.5 animate-spin text-cyan-400" />
+              ) : (
+                <Save className="w-3.5 h-3.5 text-cyan-400" />
+              )}
+              <span>ذخیره‌سازی ۱۰۰٪ کل اطلاعات</span>
+            </button>
+
+            {/* Button 2: Download Backup JSON */}
+            <button
+              onClick={handleQuickDownload}
+              disabled={isQuickDownloading}
+              className="flex-1 sm:flex-none py-2 px-3.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-md shadow-emerald-900/30 active:scale-95"
+              title="دانلود فایل JSON حاوی تمامی گروه‌ها، نشست تلگرام و تنظیمات"
+            >
+              {isQuickDownloading ? (
+                <RefreshCw className="w-3.5 h-3.5 animate-spin text-white" />
+              ) : (
+                <Download className="w-3.5 h-3.5 text-white" />
+              )}
+              <span>دانلود پشتیبان (JSON)</span>
+            </button>
+
+            {/* Button 3: Restore Backup */}
+            <button
+              onClick={() => quickFileInputRef.current?.click()}
+              className="flex-1 sm:flex-none py-2 px-3.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-md shadow-cyan-900/30 active:scale-95"
+              title="آپلود فایل JSON پشتیبان و بازگردانی فوری تمام اطلاعات"
+            >
+              <Upload className="w-3.5 h-3.5 text-white" />
+              <span>بازیابی پشتیبان</span>
+            </button>
+
+            {/* Advanced Modal Trigger */}
+            <button
+              onClick={() => setIsBackupModalOpen(true)}
+              className="p-2 bg-slate-950 hover:bg-slate-800 text-slate-400 hover:text-white rounded-xl border border-slate-800 text-xs transition-all"
+              title="مشاهده جزئیات و پیش‌نمایش فایل پشتیبان"
+            >
+              <Database className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
         
         {activeTab === 'search' && (
           <div className="space-y-8 animate-fade-in">
@@ -485,6 +688,17 @@ export default function App() {
         isOpen={isPurgeModalOpen}
         onClose={() => setIsPurgeModalOpen(false)}
         onRefreshData={fetchGroups}
+      />
+
+      {/* 100% Full Freeze, Backup & Restore Modal */}
+      <BackupRestoreModal
+        isOpen={isBackupModalOpen}
+        onClose={() => setIsBackupModalOpen(false)}
+        groupsCount={groups.length}
+        keywordsCount={settings.keywords.length}
+        isConnected={authStep === 'connected'}
+        userPhone={userProfile?.phone}
+        onRefreshData={handleFullRefresh}
       />
 
       {/* Footer */}

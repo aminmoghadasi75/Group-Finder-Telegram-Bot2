@@ -1,5 +1,5 @@
 import React from 'react';
-import { Bot, ShieldCheck, ShieldAlert, Key, Sparkles, RefreshCw } from 'lucide-react';
+import { Bot, ShieldCheck, ShieldAlert, Key, Sparkles, RefreshCw, Database, Download, Upload } from 'lucide-react';
 import { AuthStep } from '../types';
 
 interface NavbarProps {
@@ -9,6 +9,7 @@ interface NavbarProps {
   groupsCount: number;
   isSearching: boolean;
   userPhone?: string;
+  onOpenBackupModal: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -17,7 +18,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   setActiveTab,
   groupsCount,
   isSearching,
-  userPhone
+  userPhone,
+  onOpenBackupModal
 }) => {
   const isConnected = authStep === 'connected';
 
@@ -102,8 +104,23 @@ export const Navbar: React.FC<NavbarProps> = ({
             </button>
           </nav>
 
-          {/* Account Connection Status Badge */}
-          <div className="flex items-center gap-3">
+          {/* Right Header Actions: Backup Center & Account Status */}
+          <div className="flex items-center gap-2 sm:gap-3">
+            
+            {/* Backup & Restore Trigger Button */}
+            <button
+              onClick={onOpenBackupModal}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-950/80 hover:bg-slate-800 border border-slate-800 text-cyan-300 hover:text-cyan-200 text-xs font-bold transition-all shadow-sm"
+              title="ذخیره‌سازی ۱۰۰٪، دانلود و بازیابی فایل پشتیبان JSON"
+            >
+              <Database className="w-4 h-4 text-cyan-400" />
+              <span className="hidden sm:inline">پشتیبان‌گیری و بازیابی</span>
+              <span className="bg-cyan-950 text-cyan-400 border border-cyan-800 text-[10px] px-1.5 py-0.2 rounded font-mono">
+                JSON
+              </span>
+            </button>
+
+            {/* Account Connection Status Badge */}
             <button
               onClick={() => setActiveTab('auth')}
               className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs font-medium transition-all ${
@@ -115,13 +132,14 @@ export const Navbar: React.FC<NavbarProps> = ({
               {isConnected ? (
                 <>
                   <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                  <span className="hidden sm:inline">متصل به تلگرام</span>
+                  <span className="hidden lg:inline">متصل به تلگرام</span>
                   <span className="font-mono text-[11px] text-emerald-400/80">{userPhone || 'اکانت فعال'}</span>
                 </>
               ) : (
                 <>
                   <ShieldAlert className="w-4 h-4 text-amber-400" />
-                  <span>حالت دمو / غیرمتصل</span>
+                  <span className="hidden sm:inline">حالت دمو / غیرمتصل</span>
+                  <span className="sm:hidden">دمو</span>
                 </>
               )}
             </button>
@@ -153,6 +171,13 @@ export const Navbar: React.FC<NavbarProps> = ({
           <span>ایمنی</span>
         </button>
         <button
+          onClick={onOpenBackupModal}
+          className="flex flex-col items-center gap-1 text-cyan-400"
+        >
+          <Database className="w-4 h-4" />
+          <span>پشتیبان</span>
+        </button>
+        <button
           onClick={() => setActiveTab('auth')}
           className={`flex flex-col items-center gap-1 ${activeTab === 'auth' ? 'text-cyan-400' : 'text-slate-400'}`}
         >
@@ -163,3 +188,4 @@ export const Navbar: React.FC<NavbarProps> = ({
     </header>
   );
 };
+

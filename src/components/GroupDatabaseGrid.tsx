@@ -609,7 +609,15 @@ export const GroupDatabaseGrid: React.FC<GroupDatabaseGridProps> = ({
                       <Users className="w-3.5 h-3.5 text-cyan-400" />
                       {group.membersCount.toLocaleString('fa-IR')}
                     </span>
-                    <span className="text-[10px] bg-slate-900 text-cyan-300 px-1.5 py-0.5 rounded font-mono">
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-bold border ${
+                      group.safetyScore >= 90
+                        ? 'bg-emerald-950/80 text-emerald-300 border-emerald-800/60'
+                        : group.safetyScore >= 75
+                        ? 'bg-cyan-950/80 text-cyan-300 border-cyan-800/60'
+                        : group.safetyScore >= 60
+                        ? 'bg-amber-950/80 text-amber-300 border-amber-800/60'
+                        : 'bg-red-950/80 text-red-300 border-red-800/60'
+                    }`}>
                       ایمنی: {group.safetyScore}٪
                     </span>
                   </div>
